@@ -78,16 +78,23 @@ The protocol is now fully mapped. Remaining work is bounded:
    on `connected`, hand the socket to the data layer.
 5. **Media** — carry `CMD_START_REALTIME_MEDIA` / video over the ICE channel.
 
-### The one genuine unknown left
+### The one genuine blocker — the signaling crypto
 
-Steps 1–5 are mechanical given the map. The single open RE question:
+A live-device session (2026-05-18, see `eufy-debug/FINDINGS-863-part3.md`)
+captured a complete working livestream — both the app side and the NVR side —
+and pinned the blocker precisely:
 
-- **The cipher for the 5062 `0x0300` payload.** ~580 bytes of ciphertext keyed
-  off the DSK — block mode and exact key derivation are not yet pinned. The two
-  32-hex tokens in the message header are likely the key-id / IV. Resolving this
-  needs the decrypted DSK from a live session (the ECDH key is per-session, so
-  the captured `get_dsk_keys` ciphertext can't be decrypted offline) — i.e. a
-  live-device run with the library's API session active.
+- The app's signaling to `13.248.157.102:5062` uses a `0x0800`-opcode protocol.
+  The payloads are **properly encrypted** (high entropy, no ECB/keystream tell).
+- The NVR's `0x0300` push was tried against a *matched* fresh capture + DSK with
+  ~2800 (cipher, key, offset) combos — no decrypt. It is server↔NVR internal
+  (factory-keyed) and not the path the library needs anyway.
 
-Everything else — the candidate gathering, STUN/TURN/ICE, the 5062 framing — is
-either built (`ice.ts`/`iceagent.ts`/`turn.ts`) or fully specified above.
+The app-side cipher is reproducible *in principle* — the eufy app holds the key
+— but the **key derivation is not recoverable from captured traffic**. It needs
+reverse-engineering the eufy app binary / `libcoreice` (the WebRTC + signaling
+component). That is the genuine remaining work, and it is binary RE, not packet
+analysis or more module code.
+
+Everything that could be done without that — type registration, the STUN/TURN/
+ICE codec + agent + client, the full protocol map — is built or specified above.
