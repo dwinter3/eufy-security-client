@@ -8,11 +8,25 @@ not implement.
 ## Root cause (fully reverse-engineered — see #863 comments)
 
 The S4 Max NVR is a **WebRTC device** (`webrtc_sdk_version` set, empty
-`p2p_conn`/`app_conn`). It connects via:
-1. **PPCS localLookup** — UDP 32108 LAN discovery, then a P2P control session.
-2. **Signaling** — SDP/ICE/TURN credentials exchanged *inside* that control session.
-3. **TURN** — STUN `Allocate` to the station's `signaling_servers`.
-4. **ICE** — STUN connectivity checks to host + relay candidates; media follows.
+`p2p_conn`/`app_conn`). The full livestream chain — verified end-to-end from the
+#863 capture:
+
+1. **DSK** — app `POST /app/devicerelation/get_dsk_keys` (HTTPS); the response
+   `data` is ECDH-encrypted (the library's `decryptAPIData()` path) → the
+   per-station **Device Secret Key**.
+2. **Station record** — `get_devs_list` carries `p2p_did`
+   (`RUSPRAA-…`, an `R`-realm Throughtek DID), `signaling_servers`, and
+   `webrtc_sdk_version` (`7.1.4` for the T8N00).
+3. **Signaling registration** — the NVR keepalive-registers with the signaling
+   server (`webrtc-signal-us.eufylife.com` = `13.248.157.102`) on **UDP 5062**,
+   STUN-framed, every ~23 s, carrying the station SN + a 32-hex session token.
+4. **Signaling push** — on a livestream request, the signaling server pushes a
+   ~760-byte message to the NVR on 5062: opcode `0x0300`, station SN, two 32-hex
+   tokens, then **~580 bytes of ciphertext** = the SDP / ICE ufrag+pwd / TURN
+   username+password, encrypted (keyed off the DSK).
+5. **TURN** — NVR `Allocate`s a relay candidate on `13.248.157.102:3478`.
+6. **ICE** — STUN connectivity checks; on-LAN the host candidate pair wins.
+7. **Media** — over the established ICE channel.
 
 ## Verified from the #863 packet capture (2026-05-18)
 
@@ -49,31 +63,31 @@ CAM_ID/control-session path applies. Only the WebRTC media leg is new.
 All commits build (`tsc`). The STUN/ICE/TURN layer — the part the library entirely
 lacked — is implemented as standards-based, tested modules.
 
-## Remaining work (the real integration)
+## Remaining work
 
-This is deep work in the existing P2P code, not new standalone modules:
+The protocol is now fully mapped. Remaining work is bounded:
 
-1. **PPCS for type 300** — the library *already* has the PPCS message types and
-   `buildLookupWithKeyPayload()`. Needed: route type-300 stations through the
-   cloud-lookup variant on 32100-32102 with the `R`-prefixed DID, and surface the
-   discovered candidates instead of failing them as "Unwanted device".
-2. **Wire ICE+TURN into the connection** — feed PPCS-discovered + TURN-relay
-   candidates to `IceAgent`; on `connected`, hand the socket to the data layer.
-3. **Transport selection** — when `webrtc_sdk_version` is non-empty, use this
-   path instead of `P2PClientProtocol`.
-4. **Media** — carry `CMD_START_REALTIME_MEDIA` and the video over the ICE channel.
+1. **DSK fetch** — call `get_dsk_keys`, decrypt with the existing
+   `decryptAPIData()` path. (Library-supported; just needs wiring.)
+2. **Signaling client** (`src/p2p/signaling.ts`, new) — UDP client for the 5062
+   protocol: STUN-framed register/keepalive, receive the `0x0300` push. Framing
+   is decoded (see step 3/4 above); needs building.
+3. **Transport selection** — when `webrtc_sdk_version` is non-empty, use the
+   WebRTC path instead of `P2PClientProtocol`.
+4. **Wire signaling → `TurnClient` + `IceAgent`** — feed the decrypted creds in;
+   on `connected`, hand the socket to the data layer.
+5. **Media** — carry `CMD_START_REALTIME_MEDIA` / video over the ICE channel.
 
-### Genuine unknowns — narrowed by the capture
+### The one genuine unknown left
 
-The capture collapsed three vague unknowns into **one**: the **signaling exchange**.
+Steps 1–5 are mechanical given the map. The single open RE question:
 
-- ~~PPCS rendezvous packet construction~~ — resolved: it's localLookup 32108.
-- ~~ICE credential *derivation*~~ — resolved: they're not derived, they're
-  *signaled* (per-session tokens).
-- **Open:** the control-session messages that carry the SDP / ICE ufrag+pwd /
-  TURN username+password. This is encrypted P2P control traffic — needs the
-  decrypted control session (the `p2p-trace-*.log` traces, or live RE).
-- **Open:** the post-connection media framing on the established ICE channel.
+- **The cipher for the 5062 `0x0300` payload.** ~580 bytes of ciphertext keyed
+  off the DSK — block mode and exact key derivation are not yet pinned. The two
+  32-hex tokens in the message header are likely the key-id / IV. Resolving this
+  needs the decrypted DSK from a live session (the ECDH key is per-session, so
+  the captured `get_dsk_keys` ciphertext can't be decrypted offline) — i.e. a
+  live-device run with the library's API session active.
 
-These two need the decrypted P2P control session — captures of a working session
-are available from the device owner (see #863).
+Everything else — the candidate gathering, STUN/TURN/ICE, the 5062 framing — is
+either built (`ice.ts`/`iceagent.ts`/`turn.ts`) or fully specified above.
