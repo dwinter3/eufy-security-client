@@ -9,12 +9,34 @@ not implement.
 
 The S4 Max NVR is a **WebRTC device** (`webrtc_sdk_version` set, empty
 `p2p_conn`/`app_conn`). It connects via:
-1. **PPCS rendezvous** — UDP 32100-32102 to eufy P2P servers (Throughtek `f1…`).
-2. **TURN** — STUN `Allocate` to the station's `signaling_servers`.
-3. **ICE** — STUN connectivity checks to host + relay candidates.
-4. Media over the established channel.
+1. **PPCS localLookup** — UDP 32108 LAN discovery, then a P2P control session.
+2. **Signaling** — SDP/ICE/TURN credentials exchanged *inside* that control session.
+3. **TURN** — STUN `Allocate` to the station's `signaling_servers`.
+4. **ICE** — STUN connectivity checks to host + relay candidates; media follows.
 
-The legacy `P2PClientProtocol` (localLookup → CAM_ID, port 32108) does not apply.
+## Verified from the #863 packet capture (2026-05-18)
+
+Decoded directly from `eufy-debug/eufy-863-part2.pcap` — facts, not inference:
+
+- **The transport IS WebRTC.** This *corrects* `FINDINGS-863-part2.md`, which
+  concluded "nothing new transport-wise" — it looked only at the data session
+  and missed the STUN/TURN setup. The `s4-nvr-ice` premise is correct.
+- **TURN:** NVR `.54` → `13.248.157.102:3478`, 143 pkts. Server is **coturn**
+  (`Coturn-4.6.2 'Gorst'`), realm **`anker.com`**, RFC 5766 long-term creds.
+  Full Allocate → 401 → Allocate-with-MI → success observed.
+- **PPCS:** **0** packets on cloud rendezvous 32100-32102; **135** on
+  localLookup **32108**. The bootstrap is the *LAN* path the library already has.
+- **ICE:** **1512** STUN packets directly app `.46` ↔ NVR `.54` — host-candidate
+  connectivity checks. Both peers are on `192.168.4.0/22`, so the host pair wins
+  and media never needs the relay (on-LAN case).
+- **ICE roles:** the app sends `ICE-CONTROLLED` → the **NVR is controlling**.
+  `IceAgent` must be constructed `controlling=false` when playing the app role.
+- **Credentials:** TURN username = 16-char token (`JQR6R1RaaOuwKdKh`); ICE
+  ufrag = 4-char shared token (`3uCS`). Both per-session — they come from the
+  signaling exchange, not derivation.
+
+The legacy `P2PClientProtocol` localLookup (port 32108) *is* the bootstrap; its
+CAM_ID/control-session path applies. Only the WebRTC media leg is new.
 
 ## Done in this branch
 
@@ -41,10 +63,17 @@ This is deep work in the existing P2P code, not new standalone modules:
    path instead of `P2PClientProtocol`.
 4. **Media** — carry `CMD_START_REALTIME_MEDIA` and the video over the ICE channel.
 
-### Genuine unknowns (need a live-device dev loop)
-- Exact PPCS rendezvous packet construction for the type-300 NVR / `R`-DID.
-- The ICE credential derivation (ufrag / MESSAGE-INTEGRITY key source).
-- The post-connection media framing.
+### Genuine unknowns — narrowed by the capture
 
-These require iterative testing against a real S4 Max NVR — captures of a working
-session are available from the device owner (see #863).
+The capture collapsed three vague unknowns into **one**: the **signaling exchange**.
+
+- ~~PPCS rendezvous packet construction~~ — resolved: it's localLookup 32108.
+- ~~ICE credential *derivation*~~ — resolved: they're not derived, they're
+  *signaled* (per-session tokens).
+- **Open:** the control-session messages that carry the SDP / ICE ufrag+pwd /
+  TURN username+password. This is encrypted P2P control traffic — needs the
+  decrypted control session (the `p2p-trace-*.log` traces, or live RE).
+- **Open:** the post-connection media framing on the established ICE channel.
+
+These two need the decrypted P2P control session — captures of a working session
+are available from the device owner (see #863).

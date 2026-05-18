@@ -8,9 +8,10 @@
  * Allocate / Refresh exchange and exposes the relayed transport address as an
  * ICE `relay` candidate.
  *
- * Status: Allocate/Refresh implemented. Long-term-credential auth (realm /
- * nonce) is wired for the 401-challenge flow; the credential source is the
- * PPCS/HTTP layer (still to be connected).
+ * Status: Allocate/Refresh implemented and verified against the #863 capture —
+ * the server is coturn (`Coturn-4.6.2`), realm `anker.com`, RFC 5766 long-term
+ * credentials (MD5 key). The 16-char per-session TURN username/password are
+ * carried in the encrypted P2P control session (the signaling layer, TBD).
  */
 import { EventEmitter } from "events";
 import { createSocket, Socket } from "dgram";
@@ -19,6 +20,7 @@ import {
     encodeStun,
     parseStun,
     appendMessageIntegrity,
+    appendFingerprint,
     StunMessageType,
     StunAttribute,
     StunAttr,
@@ -27,6 +29,8 @@ import { IceCandidate } from "./iceagent";
 
 const ALLOCATE_LIFETIME_S = 600;
 const UDP_TRANSPORT = 0x11000000; // REQUESTED-TRANSPORT value for UDP
+// SOFTWARE value the eufy/libcoreice client sends — observed in the #863 capture.
+const SOFTWARE_NAME = "libcoreice";
 
 export interface TurnConfig {
     host: string;
@@ -64,14 +68,18 @@ export class TurnClient extends EventEmitter {
 
     private sendAllocate(): void {
         if (!this.socket) return;
+        // Attribute order matches the observed eufy/libcoreice client (#863 capture):
+        // LIFETIME, REQUESTED-TRANSPORT, SOFTWARE, USERNAME, [REALM, NONCE], [MI], FINGERPRINT.
+        // The real client sends USERNAME on the *first* Allocate too; REALM/NONCE and
+        // MESSAGE-INTEGRITY are added only after the 401 challenge supplies them.
         const attrs: StunAttr[] = [
-            { type: StunAttribute.RequestedTransport, value: u32(UDP_TRANSPORT) },
             { type: StunAttribute.Lifetime, value: u32(ALLOCATE_LIFETIME_S) },
+            { type: StunAttribute.RequestedTransport, value: u32(UDP_TRANSPORT) },
+            { type: StunAttribute.Software, value: Buffer.from(SOFTWARE_NAME) },
+            { type: StunAttribute.Username, value: Buffer.from(this.config.username) },
         ];
-        // On the 401 retry, include USERNAME / REALM / NONCE for long-term auth.
         let key: Buffer | undefined;
         if (this.nonce && this.realm) {
-            attrs.push({ type: StunAttribute.Username, value: Buffer.from(this.config.username) });
             attrs.push({ type: STUN_ATTR_REALM, value: this.realm });
             attrs.push({ type: STUN_ATTR_NONCE, value: this.nonce });
             key = longTermKey(this.config.username, this.realm.toString(), this.config.password);
@@ -82,6 +90,7 @@ export class TurnClient extends EventEmitter {
             attributes: attrs,
         });
         if (key) msg = appendMessageIntegrity(msg, key);
+        msg = appendFingerprint(msg); // FINGERPRINT is always last, after MESSAGE-INTEGRITY.
         this.socket.send(msg, this.config.port, this.config.host);
     }
 
