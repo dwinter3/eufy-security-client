@@ -78,23 +78,33 @@ The protocol is now fully mapped. Remaining work is bounded:
    on `connected`, hand the socket to the data layer.
 5. **Media** — carry `CMD_START_REALTIME_MEDIA` / video over the ICE channel.
 
-### The one genuine blocker — the signaling crypto
+### The signaling crypto — REVERSE-ENGINEERED (2026-05-18)
 
-A live-device session (2026-05-18, see `eufy-debug/FINDINGS-863-part3.md`)
-captured a complete working livestream — both the app side and the NVR side —
-and pinned the blocker precisely:
+The eufy iOS app's `BC_P2PClient.framework` is unencrypted (`cryptid 0`) and was
+disassembled. The `0x0800` signaling cipher and key schedule are now **fully
+specified** — see `eufy-debug/FINDINGS-863-part4.md`:
 
-- The app's signaling to `13.248.157.102:5062` uses a `0x0800`-opcode protocol.
-  The payloads are **properly encrypted** (high entropy, no ECB/keystream tell).
-- The NVR's `0x0300` push was tried against a *matched* fresh capture + DSK with
-  ~2800 (cipher, key, offset) combos — no decrypt. It is server↔NVR internal
-  (factory-keyed) and not the path the library needs anyway.
+```
+cipher : AES-128-ECB (mbedTLS)
+key    : quickAesKey (random 16-char string) with the message's decimal
+         packetId overlaid right-aligned onto the tail 16 bytes
+quickAesKey : random [0-9a-zA-Z]{16}, generated per session (_generate_aes_key)
+              and exchanged in-band (APP_CMD_GET_ASEKEY)
+packetId    : per-message counter carried in the 0x0800 header
+```
 
-The app-side cipher is reproducible *in principle* — the eufy app holds the key
-— but the **key derivation is not recoverable from captured traffic**. It needs
-reverse-engineering the eufy app binary / `libcoreice` (the WebRTC + signaling
-component). That is the genuine remaining work, and it is binary RE, not packet
-analysis or more module code.
+There is **no unknown KDF and nothing left to crack** — the key is a random
+string negotiated in-band. The library implements the protocol by *participating
+in the exchange* (generate/accept `quickAesKey`, then AES-128-ECB per message),
+not by deriving anything. Old captured ciphertext is not decryptable offline
+(each session's key was random and is gone) — expected, and not a blocker.
 
-Everything that could be done without that — type registration, the STUN/TURN/
-ICE codec + agent + client, the full protocol map — is built or specified above.
+### Remaining work — implementation, no RE left
+
+1. `signaling.ts` — the `0x0800` UDP client: register/keepalive, the
+   `APP_CMD_GET_ASEKEY` key exchange, AES-128-ECB body crypto per the spec above.
+2. Wire it to `TurnClient` + `IceAgent` + the transport selection for type 300.
+3. Media leg.
+
+The cryptographic wall — the thing that genuinely blocked #863 — is **down**.
+What's left is ordinary protocol implementation.
