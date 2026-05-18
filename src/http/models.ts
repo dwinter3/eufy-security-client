@@ -164,6 +164,8 @@ export interface StationListResponse {
   query_server_did: string;
   prefix: string;
   wakeup_key: string;
+  signaling_servers?: Array<string>; // issue #863 - WebRTC signaling endpoints (NVR / type 300)
+  webrtc_sdk_version?: string; // issue #863 - non-empty => station uses WebRTC, not legacy P2P
   member: Member;
   params: Array<ParameterResponse>;
   devices: Array<StationListDevice>;
