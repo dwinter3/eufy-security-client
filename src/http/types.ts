@@ -67,6 +67,8 @@ export enum DeviceType {
   FLOODLIGHT_CAMERA_8426 = 87, //E30
   SOLO_CAMERA_E30 = 88,
   CAMERA_S4 = 89, //T8172
+  POE_CAM_S4 = 301, //T8E00 - PoE Cam S4, NVR-attached (issue #863)
+  NVR_S4_MAX = 300, //T8N005 - S4 Max NVR station (issue #863)
   SMART_DROP = 90,
   BATTERY_DOORBELL_PLUS = 91,
   DOORBELL_SOLO = 93,
@@ -8707,6 +8709,7 @@ export const DeviceProperties: Properties = {
 
 DeviceProperties[DeviceType.INDOOR_PT_CAMERA_C220_V2] = DeviceProperties[DeviceType.INDOOR_PT_CAMERA_C220];
 DeviceProperties[DeviceType.INDOOR_PT_CAMERA_C220_V3] = DeviceProperties[DeviceType.INDOOR_PT_CAMERA_C220];
+DeviceProperties[DeviceType.POE_CAM_S4] = DeviceProperties[DeviceType.CAMERA_S4]; // issue #863 - T8E00 PoE Cam S4
 
 export const StationNameProperty: PropertyMetadataString = {
   key: "station_name",
@@ -10670,6 +10673,7 @@ export const DeviceCommands: Commands = {
 
 DeviceCommands[DeviceType.INDOOR_PT_CAMERA_C220_V2] = DeviceCommands[DeviceType.INDOOR_PT_CAMERA_C220];
 DeviceCommands[DeviceType.INDOOR_PT_CAMERA_C220_V3] = DeviceCommands[DeviceType.INDOOR_PT_CAMERA_C220];
+DeviceCommands[DeviceType.POE_CAM_S4] = DeviceCommands[DeviceType.CAMERA_S4]; // issue #863 - T8E00 PoE Cam S4
 
 export const StationCommands: Commands = {
   [DeviceType.STATION]: [

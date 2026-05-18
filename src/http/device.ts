@@ -1866,6 +1866,7 @@ export class Device extends TypedEmitter<DeviceEvents> {
 
   static isCamera(type: number): boolean {
     return (
+      type == DeviceType.POE_CAM_S4 || // issue #863 - T8E00 PoE Cam S4
       type == DeviceType.CAMERA ||
       type == DeviceType.CAMERA2 ||
       type == DeviceType.CAMERA_E ||
@@ -1987,7 +1988,8 @@ export class Device extends TypedEmitter<DeviceEvents> {
       type === DeviceType.STATION ||
       type === DeviceType.HB3 ||
       type === DeviceType.HOMEBASE_MINI ||
-      type === DeviceType.MINIBASE_CHIME
+      type === DeviceType.MINIBASE_CHIME ||
+      type === DeviceType.NVR_S4_MAX // issue #863 - S4 Max NVR
     );
   }
 
