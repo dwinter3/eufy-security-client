@@ -32,12 +32,13 @@ const SIGNALING_PORT = 5062;
 const RTC_HEADER_LEN = 0x3c;
 
 /**
- * CRC-16 over the frame (rtc_protocol header field +0x02).
- * TODO(#863): confirm the exact variant against `_ProtocolGenerateCRC16` — this
- * is CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) as a placeholder.
+ * CRC-16 for the rtc_protocol header field +0x02.
+ * Verified from `_ProtocolGenerateCRC16`: CRC-16/CCITT, poly 0x1021,
+ * init 0x0000 (the app uses a 16-entry nibble table 0000,1021,2042,… — this
+ * bitwise form is equivalent). Computed over `frame[0x04:]`.
  */
 function crc16(buf: Buffer): number {
-    let crc = 0xffff;
+    let crc = 0x0000;
     for (let i = 0; i < buf.length; i++) {
         crc ^= buf[i] << 8;
         for (let b = 0; b < 8; b++) {
@@ -192,7 +193,8 @@ export class SignalingClient extends EventEmitter {
         frame.writeUInt8(7, 0x0c);
         frame.writeUInt8(0x14, 0x28);
         enc.copy(frame, RTC_HEADER_LEN);
-        frame.writeUInt16LE(crc16(frame), 0x02); // TODO(#863): confirm CRC variant
+        // CRC-16/CCITT over frame[0x04:] (header tail + body), per _ProtocolGenerateCRC16.
+        frame.writeUInt16LE(crc16(frame.subarray(0x04)), 0x02);
         return { frame, packetId };
     }
 
