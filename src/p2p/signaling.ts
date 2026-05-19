@@ -28,6 +28,24 @@ const KEY_CHARSET =
     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const KEY_LEN = 16;
 const SIGNALING_PORT = 5062;
+/** rtc_protocol fixed header length (0x3c), from `_ProtocolGetBuffer`. */
+const RTC_HEADER_LEN = 0x3c;
+
+/**
+ * CRC-16 over the frame (rtc_protocol header field +0x02).
+ * TODO(#863): confirm the exact variant against `_ProtocolGenerateCRC16` — this
+ * is CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) as a placeholder.
+ */
+function crc16(buf: Buffer): number {
+    let crc = 0xffff;
+    for (let i = 0; i < buf.length; i++) {
+        crc ^= buf[i] << 8;
+        for (let b = 0; b < 8; b++) {
+            crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+        }
+    }
+    return crc;
+}
 
 /**
  * Generate a `quickAesKey` — a random 16-character alphanumeric string.
@@ -145,29 +163,45 @@ export class SignalingClient extends EventEmitter {
     }
 
     /**
-     * Build a `0x0800` frame: 2-byte opcode, 2-byte length, then a header that
-     * carries `packetId`, then the AES-128-ECB-encrypted body.
+     * Build an rtc_protocol frame.
      *
-     * TODO(#863): the exact header layout (packetId offset, flags) is not yet
-     * confirmed byte-for-byte — validate against a live device capture before
-     * relying on this for a real connection.
+     * Reverse-engineered from `_ProtocolGetBuffer`: the frame is a fixed
+     * `RTC_HEADER_LEN` (0x3c = 60) byte header followed by the body. Verified
+     * header fields:
+     *   +0x00  u16   tag (=3)
+     *   +0x02  u16   CRC16 over the frame (_ProtocolGenerateCRC16)
+     *   +0x06  u16   body length
+     *   +0x08  u32   packetId          (also keys the AES — see deriveMessageKey)
+     *   +0x0c  u8    (=7)
+     *   +0x20  16B   (copied verbatim by the serializer)
+     *   +0x28  u8    (=0x14)
+     *   +0x3c  ...   body (AES-128-ECB encrypted)
+     *
+     * TODO(#863): (a) the CRC16 polynomial/seed — disassemble
+     * `_ProtocolGenerateCRC16`; (b) the outer UDP wrapper (the leading `0800`
+     * seen in captures is added by the channel layer, not rtc_protocol) —
+     * both still need a live-device capture to confirm byte-for-byte.
      */
     public encodeMessage(body: Buffer): { frame: Buffer; packetId: number } {
         const packetId = ++this.packetId;
         const enc = encryptBody(this.quickAesKey, packetId, body);
-        const header = Buffer.alloc(8);
-        header.writeUInt16BE(0x0800, 0);
-        header.writeUInt16BE(enc.length, 2);
-        header.writeUInt32BE(packetId, 4); // TODO(#863): confirm offset
-        return { frame: Buffer.concat([header, enc]), packetId };
+        const frame = Buffer.alloc(RTC_HEADER_LEN + enc.length);
+        frame.writeUInt16LE(3, 0x00);
+        frame.writeUInt16LE(enc.length, 0x06);
+        frame.writeUInt32LE(packetId, 0x08);
+        frame.writeUInt8(7, 0x0c);
+        frame.writeUInt8(0x14, 0x28);
+        enc.copy(frame, RTC_HEADER_LEN);
+        frame.writeUInt16LE(crc16(frame), 0x02); // TODO(#863): confirm CRC variant
+        return { frame, packetId };
     }
 
-    /** Parse an inbound `0x0800` frame; returns the decrypted body or undefined. */
+    /** Parse an inbound rtc_protocol frame; returns the decrypted body or undefined. */
     public decodeMessage(frame: Buffer): Buffer | undefined {
-        if (frame.length < 8 || frame.readUInt16BE(0) !== 0x0800) return undefined;
-        const packetId = frame.readUInt32BE(4); // TODO(#863): confirm offset
+        if (frame.length < RTC_HEADER_LEN) return undefined;
+        const packetId = frame.readUInt32LE(0x08);
         try {
-            return decryptBody(this.quickAesKey, packetId, frame.subarray(8));
+            return decryptBody(this.quickAesKey, packetId, frame.subarray(RTC_HEADER_LEN));
         } catch {
             return undefined;
         }
