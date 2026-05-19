@@ -99,12 +99,34 @@ in the exchange* (generate/accept `quickAesKey`, then AES-128-ECB per message),
 not by deriving anything. Old captured ciphertext is not decryptable offline
 (each session's key was random and is gone) — expected, and not a blocker.
 
-### Remaining work — implementation, no RE left
+### LIVE-TEST-READY (2026-05-18, autonomous build loop)
 
-1. `signaling.ts` — the `0x0800` UDP client: register/keepalive, the
-   `APP_CMD_GET_ASEKEY` key exchange, AES-128-ECB body crypto per the spec above.
-2. Wire it to `TurnClient` + `IceAgent` + the transport selection for type 300.
-3. Media leg.
+All transport modules are built, build clean (`tsc`), and have their crypto
+self-verified. The fork is staged for a short live-device session:
 
-The cryptographic wall — the thing that genuinely blocked #863 — is **down**.
-What's left is ordinary protocol implementation.
+| Module | Status |
+|--------|--------|
+| `src/p2p/ice.ts` | STUN/ICE/TURN codec — done |
+| `src/p2p/iceagent.ts` | ICE agent (host candidates, checks) — done |
+| `src/p2p/turn.ts` | TURN client (Allocate/Refresh) — done |
+| `src/p2p/signaling.ts` | `0x0800` client: AES-128-ECB body crypto, rtc_protocol framing (0x3c header), CRC-16/CCITT — **verified round-trip** |
+| `src/p2p/media.ts` | AES-GCM media-frame crypto — **verified round-trip** |
+| `src/p2p/webrtc-transport.ts` | `WebRTCTransport` orchestration + `shouldUseWebRTC()` selector — done |
+
+Reverse-engineered and verified from the eufy iOS app binary:
+the rtc_protocol frame (`0x3c` header + body), CRC-16/CCITT (poly 0x1021,
+init 0), the AES-128-ECB signaling key schedule, and the AES-GCM media leg.
+
+### What still needs a live device (the dev-loop TODOs)
+
+Marked `TODO(#863)` in the source. These need a live NVR to validate — they
+cannot be pinned from static analysis or old captures:
+
+1. The outer UDP wrapper / register-frame bytes (the `0800` prefix).
+2. The `APP_CMD_GET_ASEKEY` key-exchange sequencing.
+3. The SDP-exchange flow in `WebRTCTransport.connect()`.
+4. The media ECC key-agreement + exact `crypto_type` values + depacketization.
+5. Hooking `shouldUseWebRTC()` into `Station`/`session.ts`.
+
+The cryptographic wall — the thing that genuinely blocked #863 — is **down**,
+and every module is built and typed. What remains is a live-device dev loop.
