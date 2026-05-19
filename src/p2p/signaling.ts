@@ -178,10 +178,19 @@ export class SignalingClient extends EventEmitter {
      *   +0x28  u8    (=0x14)
      *   +0x3c  ...   body (AES-128-ECB encrypted)
      *
-     * TODO(#863): (a) the CRC16 polynomial/seed — disassemble
-     * `_ProtocolGenerateCRC16`; (b) the outer UDP wrapper (the leading `0800`
-     * seen in captures is added by the channel layer, not rtc_protocol) —
-     * both still need a live-device capture to confirm byte-for-byte.
+     * Outer framing (empirical — live capture wt-ref.pcap + `_ProtocolSetBuffer`):
+     *   - NVR<->signaling messages are STUN-wrapped: a 20-byte STUN header
+     *     (msgType 0x0001, magic 0x2112a442, 12-byte txid) precedes the eufy
+     *     payload, which itself begins with a 2-byte opcode (0x0300 push,
+     *     0x0800 app message).
+     *   - The `_ProtocolSetBuffer` parser reads a version byte at +0x0c
+     *     (must be >=2), a 0x28 (40) byte base header, plus a MessageHeaderExtend
+     *     of up to 0x14 (20) bytes — total <= 0x3c.
+     *   - The app's 0x0800 body is AES-128-ECB encrypted (the repeating 16-byte
+     *     ciphertext blocks observed in captures are the ECB tell).
+     * TODO(#863): the exact 0x0800 outer-wrapper byte layout and the
+     * encrypt-vs-frame ordering still need a live-device dev loop to pin
+     * byte-for-byte — `encodeMessage` below is the rtc-frame core only.
      */
     public encodeMessage(body: Buffer): { frame: Buffer; packetId: number } {
         const packetId = ++this.packetId;
